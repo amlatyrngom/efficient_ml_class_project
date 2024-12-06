@@ -10,7 +10,6 @@ import pickle as pkl
 # SmoothQuant
 from smoothquant.smooth import smooth_lm
 from smoothquant.fake_quant import WQAQLinear, quantize_model
-from smoothquant.calibration import get_act_scales
 # AWQ
 from huggingface_hub import hf_hub_download
 from awq.quantize.pre_quant import apply_awq
@@ -104,9 +103,14 @@ class Investigation:
         else:
             raise ValueError("Unknown model name")
         # SmoothQuant act scales
-        scales_path = f"{repo_dir}/act_scales/{short_model_name}.pt"
-        assert os.path.exists(scales_path), f"Cannot find the act scales at {scales_path}"
-        self.smooth_act_scales = torch.load(scales_path)
+        smooth_scales_path = f"{repo_dir}/act_scales/{short_model_name}.pt"
+        smooth_awq_scales_path = f"{repo_dir}/act_scales/{short_model_name}-awq.pt"
+        assert os.path.exists(smooth_scales_path), f"Cannot find the act scales at {smooth_scales_path}"
+        self.smooth_act_scales = torch.load(smooth_scales_path)
+        if os.path.exists(smooth_awq_scales_path):
+            self.smooth_awq_act_scales = torch.load(smooth_awq_scales_path)
+        else:
+            self.smooth_awq_act_scales = None
         # AWQ scales.
         assert short_model_name in ["opt-125m", "opt-6.7b", "opt-13b", "llama-2-7b"], "Only supported models for AWQ. Include more."
         if q_protect:
@@ -203,7 +207,7 @@ class Investigation:
         return res
         
 
-    def make_base_smooth_model(self):
+    def make_base_smooth_model(self, for_awq=False):
         model = self.make_base_model()
         print("Smoothing model...")
         smooth_lm(model, self.smooth_act_scales, self.q_smoothing_strength)
@@ -243,9 +247,9 @@ class Investigation:
         if apply_smooth:
             if self.q_protect:
                 print("Computing scales after AWQ...")
-                act_scales = get_act_scales(model, self.tokenizer, self.perp_dataset)
+                assert self.smooth_awq_act_scales is not None, "AWQ scales not available. Make the sure file has been created/"
                 print("Smoothing model...")
-                smooth_lm(model, act_scales, self.q_smoothing_strength)
+                smooth_lm(model, self.smooth_awq_act_scales, self.q_smoothing_strength)
             else:
                 print("Smoothing model...")
                 smooth_lm(model, self.smooth_act_scales, self.q_smoothing_strength)
@@ -329,7 +333,7 @@ def make_setups():
     return setups
 
 
-def sweep(short_model_name, repo_dir, save_dir, perp=True):
+def sweep(short_model_name, repo_dir, save_dir, perp=True, uncache=[]):
     os.makedirs(save_dir, exist_ok=True)
     result_file = f"{save_dir}/results_{short_model_name}.pkl"
     if os.path.exists(result_file):
@@ -376,15 +380,17 @@ def sweep(short_model_name, repo_dir, save_dir, perp=True):
     for setup in setups:
         setup_key = str(setup)
         base_expt_name = setup_name(setup)
-        if setup_key in results and base_expt_name != "W4A4 G128":
+        simple_expt_name = f"{base_expt_name}"
+        smooth_expt_name = f"Smooth {base_expt_name}"
+        uncached = simple_expt_name in uncache or smooth_expt_name in uncache or base_expt_name in uncache
+        if setup_key in results and not uncached:
             print(f"Setup {base_expt_name} already run. Results={results[setup_key]['q_res']}, SmoothResults={results[setup_key]['q_smooth_res']}")
             continue
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         investigation = Investigation(short_model_name, repo_dir, **setup)
-        simple_expt_name = f"{base_expt_name}"
-        if simple_expt_name not in results:
+        if simple_expt_name not in results or (simple_expt_name in uncache):
             print(f"Running setup {base_expt_name}")
             q_res = investigation.evaluate_setup_model(perp=perp, apply_smooth=False)
             results[simple_expt_name] = q_res
@@ -394,8 +400,7 @@ def sweep(short_model_name, repo_dir, save_dir, perp=True):
             q_res = results[simple_expt_name]
         print(f"{simple_expt_name}: {q_res}")
         # Smoothed model
-        smooth_expt_name = f"Smooth {base_expt_name}"
-        if smooth_expt_name not in results:
+        if smooth_expt_name not in results or (smooth_expt_name in uncache):
             print(f"Running setup {smooth_expt_name}")
             q_smooth_res = investigation.evaluate_setup_model(perp=perp, apply_smooth=True)
             results[smooth_expt_name] = q_smooth_res
