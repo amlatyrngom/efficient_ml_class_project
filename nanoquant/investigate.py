@@ -46,6 +46,7 @@ class PerplexityEvaluator:
             neg_log_likelihood = loss.float() * 2048
             nlls.append(neg_log_likelihood)
 
+
         return torch.exp(torch.stack(nlls).sum() / (nsamples * 2048))
 
 class AccuracyEvaluator:
@@ -109,11 +110,11 @@ class Investigation:
         self.repo_dir = repo_dir
         self.local_model_path = local_model_path
         self.dataset_cache_dir = dataset_cache_dir
-        self.awq_cache_dir = f"{repo_dir}/{aws_cache_rel_dir}"
+        self.awq_cache_dir = f"{repo_dir}/{awq_cache_rel_dir}"
         self.local_files_only = local_files_only
         
         # SmoothQuant act scales
-        scales_path = f"{repo_dir}/act_scales/{short_model_name}.pt"
+        scales_path = f"{repo_dir}/smoothquant/act_scales/{short_model_name}.pt"
         assert os.path.exists(scales_path), f"Cannot find the act scales at {scales_path}"
         self.smooth_act_scales = torch.load(scales_path)
         # AWQ scales.
@@ -121,11 +122,11 @@ class Investigation:
         if q_protect:
             if self.local_files_only:
                 awq_pt_name = f"{short_model_name}-w4-g128.pt"
-                self.awq_pt = torch.load(f"{self.awq_cache_dir}/{awq_pt_name}", map_location="cpu")
+                self.awq_pt = torch.load(f"{self.awq_cache_dir}/{awq_pt_name}", map_location="cuda")
             else:
                 awq_zoo = "mit-han-lab/awq-model-zoo"
                 awq_pt_filename = hf_hub_download(repo_id=awq_zoo, filename=awq_pt_name, repo_type="dataset")
-                self.awq_pt = torch.load(awq_pt_filename, map_location="cpu")
+                self.awq_pt = torch.load(awq_pt_filename, map_location="cuda")
         else:
             self.awq_pt = None
             
@@ -169,7 +170,7 @@ class Investigation:
             model_fp16 = AutoModelForCausalLM.from_pretrained(
                self.model_name, torch_dtype=torch.float16, device_map="auto"
             )
-        
+        #model_fp16 = torch.nn.DataParallel(model_fp16)
         print("Done making base model.")
         return model_fp16
     
@@ -190,7 +191,7 @@ class Investigation:
         apply_awq(model, self.awq_pt)
         print("Done applying AWQ.")
         # Move to device
-        model = model.to(self.device)
+        # model = model.to(self.device)
         return model
         
 
@@ -347,7 +348,7 @@ def make_setups():
     return setups
 
 
-def sweep(short_model_name, repo_dir, save_dir, perp=True):
+def sweep(short_model_name, repo_dir, save_dir, perp=True, local_model_path="", local_files_only=False):
     os.makedirs(save_dir, exist_ok=True)
     result_file = f"{save_dir}/results_{short_model_name}.pkl"
     if os.path.exists(result_file):
@@ -366,25 +367,76 @@ def sweep(short_model_name, repo_dir, save_dir, perp=True):
 
         print(f"Running baseline {baseline}")
         if baseline == "fp16":
-            investigation = Investigation(short_model_name, repo_dir)
+            investigation = Investigation(
+                short_model_name=short_model_name,
+                repo_dir=repo_dir,
+                local_model_path=local_model_path,
+                local_files_only=local_files_only,
+            )
             res = investigation.evaluate_base_model(perp=perp)
         elif baseline == "awq":
-            investigation = Investigation(short_model_name, repo_dir, q_group_size=128)
+            investigation = Investigation(
+                short_model_name=short_model_name,
+                repo_dir=repo_dir,
+                local_model_path=local_model_path,
+                local_files_only=local_files_only,
+                q_group_size=128
+            )
             res = investigation.evaluate_base_awq_model(perp=perp)
         elif baseline == "smoothquant":
-            investigation = Investigation(short_model_name, repo_dir, n_bits=8, q_group_size=0, q_protect=False)
+            investigation = Investigation(
+                short_model_name=short_model_name,
+                repo_dir=repo_dir,
+                local_model_path=local_model_path,
+                local_files_only=local_files_only,
+                n_bits=8,
+                q_group_size=0,
+                q_protect=False
+            )
             res = investigation.evaluate_base_smooth_model(perp=perp)
         elif baseline == "smoothquant-g":
-            investigation = Investigation(short_model_name, repo_dir, n_bits=8, q_group_size=128, q_protect=False)
+            investigation = Investigation(
+                short_model_name=short_model_name,
+                repo_dir=repo_dir,
+                local_model_path=local_model_path,
+                local_files_only=local_files_only,
+                n_bits=8,
+                q_group_size=128,
+                q_protect=False
+            )
             res = investigation.evaluate_base_smooth_model(perp=perp)
         elif baseline == "w8a8":
-            investigation = Investigation(short_model_name, repo_dir, n_bits=8, q_group_size=0, q_protect=False)
+            investigation = Investigation(
+                short_model_name=short_model_name,
+                repo_dir=repo_dir,
+                local_model_path=local_model_path,
+                local_files_only=local_files_only,
+                n_bits=8,
+                q_group_size=0,
+                q_protect=False
+            )
             res = investigation.evaluate_base_quantized_model(perp=perp)
         elif baseline == "w4a4":
-            investigation = Investigation(short_model_name, repo_dir, n_bits=4, q_group_size=0, q_protect=False)
+            investigation = Investigation(
+                short_model_name=short_model_name,
+                repo_dir=repo_dir,
+                local_model_path=local_model_path,
+                local_files_only=local_files_only,
+                n_bits=4,
+                q_group_size=0,
+                q_protect=False
+            )
             res = investigation.evaluate_base_quantized_model(perp=perp)
         elif baseline == "smooth-w4a4":
-            investigation = Investigation(short_model_name, repo_dir, n_bits=4, q_group_size=0, q_protect=False)
+            investigation = Investigation(
+                short_model_name=short_model_name,
+                repo_dir=repo_dir,
+                local_model_path=local_model_path,
+                local_files_only=local_files_only,
+                n_bits=4,
+                q_group_size=0,
+                q_protect=False
+            )
             res = investigation.evaluate_base_smooth_model(perp=perp)
         results[baseline] = res
         print(f"{baseline}: {res}")
@@ -400,7 +452,13 @@ def sweep(short_model_name, repo_dir, save_dir, perp=True):
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        investigation = Investigation(short_model_name, repo_dir, **setup)
+        investigation = Investigation(
+            short_model_name=short_model_name,
+            repo_dir=repo_dir,
+            local_model_path=local_model_path,
+            local_files_only=local_files_only,
+            **setup
+        )
         simple_expt_name = f"{base_expt_name}"
         if simple_expt_name not in results:
             print(f"Running setup {base_expt_name}")
