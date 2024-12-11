@@ -5,13 +5,13 @@ import gc
 from torch import nn
 from transformers import GPT2Tokenizer
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk, config
 import pickle as pkl
 # SmoothQuant
 from smoothquant.smooth import smooth_lm
 from smoothquant.fake_quant import WQAQLinear, quantize_model
 # AWQ
-from huggingface_hub import hf_hub_download
+# from huggingface_hub import hf_hub_download
 from awq.quantize.pre_quant import apply_awq
 
 
@@ -85,6 +85,10 @@ class Investigation:
             self,
             short_model_name: str = "opt-125m",
             repo_dir: str = ".",
+            local_model_path: str = "opt-125m",
+            dataset_cache_dir: str = "/state/partition1/user/zzhang1/cache/huggingface/datasets",
+            awq_cache_rel_dir: str = "llm-awq/awq_cache",
+            local_files_only: bool = True,
             n_bits: int = 4, 
             q_group_size: int = 128,
             q_protect: bool = True,
@@ -102,6 +106,12 @@ class Investigation:
             self.model_name = f"meta-llama/{short_model_name}"
         else:
             raise ValueError("Unknown model name")
+        self.repo_dir = repo_dir
+        self.local_model_path = local_model_path
+        self.dataset_cache_dir = dataset_cache_dir
+        self.awq_cache_dir = f"{repo_dir}/{aws_cache_rel_dir}"
+        self.local_files_only = local_files_only
+        
         # SmoothQuant act scales
         scales_path = f"{repo_dir}/act_scales/{short_model_name}.pt"
         assert os.path.exists(scales_path), f"Cannot find the act scales at {scales_path}"
@@ -109,17 +119,30 @@ class Investigation:
         # AWQ scales.
         assert short_model_name in ["opt-125m", "opt-6.7b", "opt-13b", "llama-2-7b"], "Only supported models for AWQ. Include more."
         if q_protect:
-            awq_zoo = "mit-han-lab/awq-model-zoo"
-            awq_pt_name = f"{short_model_name}-w4-g128.pt"
-            awq_pt_filename = hf_hub_download(repo_id=awq_zoo, filename=awq_pt_name, repo_type="dataset")
-            self.awq_pt = torch.load(awq_pt_filename, map_location="cpu")
+            if self.local_files_only:
+                awq_pt_name = f"{short_model_name}-w4-g128.pt"
+                self.awq_pt = torch.load(f"{self.awq_cache_dir}/{awq_pt_name}", map_location="cpu")
+            else:
+                awq_zoo = "mit-han-lab/awq-model-zoo"
+                awq_pt_filename = hf_hub_download(repo_id=awq_zoo, filename=awq_pt_name, repo_type="dataset")
+                self.awq_pt = torch.load(awq_pt_filename, map_location="cpu")
         else:
             self.awq_pt = None
+            
         # Make dataset.
-        acc_tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
-        perp_tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
-        acc_dataset = load_dataset("lambada", split=f"validation[:{n_samples}]")
-        perp_dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+        if self.local_files_only:
+            acc_tokenizer = AutoTokenizer.from_pretrained(self.local_model_path, use_fast=False)
+            perp_tokenizer = AutoTokenizer.from_pretrained(self.local_model_path, use_fast=False)
+            acc_dataset_name = f"{self.dataset_cache_dir}/lambada"
+            acc_dataset = load_dataset("lambada", split=f"validation[:{n_samples}]", cache_dir=self.dataset_cache_dir)
+            perp_dataset_name = f"{self.dataset_cache_dir}/wikitext"
+            perp_dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test', cache_dir=self.dataset_cache_dir)
+        else:
+            acc_tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
+            perp_tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
+            acc_dataset = load_dataset("lambada", split=f"validation[:{n_samples}]")
+            self.perp_dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+
         if torch.cuda.is_available():
             self.device = "cuda"
         elif torch.backends.mps.is_available():
@@ -138,9 +161,15 @@ class Investigation:
 
     def make_base_model(self):
         print("Making base model...")
-        model_fp16 = AutoModelForCausalLM.from_pretrained(
-            self.model_name, torch_dtype=torch.float16, device_map="auto"
-        )
+        if self.local_files_only:
+            model_fp16 = AutoModelForCausalLM.from_pretrained(
+                self.local_model_path, torch_dtype=torch.float16, device_map="auto", local_files_only=True
+            )
+        else:
+            model_fp16 = AutoModelForCausalLM.from_pretrained(
+               self.model_name, torch_dtype=torch.float16, device_map="auto"
+            )
+        
         print("Done making base model.")
         return model_fp16
     
@@ -265,9 +294,6 @@ class Investigation:
         del model
         return res
 
-        
-
-
 
 def make_setup(n_bits, q_group_size, q_protect, q_protection_scale, q_protection_ratio, q_smoothing_strength):
     return {
@@ -276,7 +302,7 @@ def make_setup(n_bits, q_group_size, q_protect, q_protection_scale, q_protection
         "q_protect": q_protect,
         "q_protection_scale": q_protection_scale,
         "q_protection_ratio": q_protection_ratio,
-        "q_smoothing_strength": q_smoothing_strength,       
+        "q_smoothing_strength": q_smoothing_strength,      
     }
 
 def setup_name(setup):
@@ -405,7 +431,6 @@ def sweep(short_model_name, repo_dir, save_dir, perp=True):
         # Checkpointing
         with open(result_file, "wb") as f:
             pkl.dump(results, f)
-
 
 
 
