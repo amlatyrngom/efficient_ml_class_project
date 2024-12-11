@@ -9,6 +9,8 @@ __pycache__
 # OS ignores
 .DS_Store
 Thumbs.db
+# Jupyter notebook ignores
+*.ipynb_checkpoints
 
 # Data
 smoothquant/act_scales/val.jsonl.zst
