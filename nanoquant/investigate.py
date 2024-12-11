@@ -10,6 +10,7 @@ import pickle as pkl
 # SmoothQuant
 from smoothquant.smooth import smooth_lm
 from smoothquant.fake_quant import WQAQLinear, quantize_model
+from smoothquant.calibration import get_act_scales
 # AWQ
 # from huggingface_hub import hf_hub_download
 from awq.quantize.pre_quant import apply_awq
@@ -134,16 +135,17 @@ class Investigation:
         if self.local_files_only:
             acc_tokenizer = AutoTokenizer.from_pretrained(self.local_model_path, use_fast=False)
             perp_tokenizer = AutoTokenizer.from_pretrained(self.local_model_path, use_fast=False)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.local_model_path, model_max_length=512)
             acc_dataset_name = f"{self.dataset_cache_dir}/lambada"
             acc_dataset = load_dataset("lambada", split=f"validation[:{n_samples}]", cache_dir=self.dataset_cache_dir)
             perp_dataset_name = f"{self.dataset_cache_dir}/wikitext"
-            perp_dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test', cache_dir=self.dataset_cache_dir)
+            self.perp_dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test', cache_dir=self.dataset_cache_dir)
         else:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, model_max_length=512)
             acc_tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
             perp_tokenizer = AutoTokenizer.from_pretrained(self.model_name, use_fast=False)
             acc_dataset = load_dataset("lambada", split=f"validation[:{n_samples}]")
             self.perp_dataset = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
-
         if torch.cuda.is_available():
             self.device = "cuda"
         elif torch.backends.mps.is_available():
@@ -151,7 +153,7 @@ class Investigation:
         else:
             self.device = "cpu"
         self.acc_evaluator = AccuracyEvaluator(acc_dataset, acc_tokenizer, self.device)
-        self.perp_evaluator = PerplexityEvaluator(perp_dataset, perp_tokenizer, self.device, n_samples=n_samples)
+        self.perp_evaluator = PerplexityEvaluator(self.perp_dataset, perp_tokenizer, self.device, n_samples=n_samples)
         self.n_bits = n_bits
         self.q_group_size = q_group_size
         self.q_protect = q_protect
@@ -269,8 +271,14 @@ class Investigation:
         else:
             model = self.make_base_model()
         if apply_smooth:
-            print("Smoothing model...")
-            smooth_lm(model, self.smooth_act_scales, self.q_smoothing_strength)
+            if self.q_protect:
+                print("Computing scales after AWQ...")
+                act_scales = get_act_scales(model, self.tokenizer, self.perp_dataset)
+                print("Smoothing model...")
+                smooth_lm(model, act_scales, self.q_smoothing_strength)
+            else:
+                print("Smoothing model...")
+                smooth_lm(model, self.smooth_act_scales, self.q_smoothing_strength)
             print("Done smoothing model.")
         print("Quantizing model...")
         print(f"Quantizing model... {self.q_protect}")
