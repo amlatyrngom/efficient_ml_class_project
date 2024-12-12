@@ -1,9 +1,9 @@
 smoothquant_path=smoothquant
 # Get model short name from the first argument
 model_short_name=$1
-pt_file="$smoothquant_path/act_scales/$model_short_name.pt"
+pt_file="$smoothquant_path/act_scales/$model_short_name-awq.pt"
 if [ -f "$pt_file" ]; then
-    echo "Act scales already exist for $model_short_name"
+    echo "Act scales already exist for $model_short_name-awq"
     exit 0
 fi
 # Get huggingface model name from the short name
@@ -28,4 +28,5 @@ fi
 python $smoothquant_path/examples/generate_act_scales.py \
     --model-name "$model_full_name" \
     --output-path "$pt_file" \
-    --dataset-path "$validation_data_path"
+    --dataset-path "$validation_data_path" \
+    --awq
