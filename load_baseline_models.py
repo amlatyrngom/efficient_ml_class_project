@@ -1,5 +1,6 @@
 import argparse
 from huggingface_hub import login
+import os
 import torch
 import tqdm
 from torch import nn
@@ -19,7 +20,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model_name', default='facebook/opt-125m')
 args = parser.parse_args()
 
-login(token="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")
+login(token=os.environ["HF_TOKEN"])
 
 model_name = args.model_name
 opt_model_fp16 = OPTForCausalLM.from_pretrained(

@@ -29,7 +29,7 @@ To make AWQ-aware SmoothQuant scales, use
 ```sh
 bash make_smooth_awq_scales.sh <short-model-name>
 ```
-These scripts contain some utility code to work on a cluster where the compute nodes do not have internet access. To run these script on supercloud, use `make_smooth_scales_supercloud.sh` and `make_smooth_awq_scales_supercloud.sh`.
+These scripts contain some utility code to work on a cluster where the compute nodes do not have internet access. To run these script on supercloud, use `make_smooth_scales_supercloud.sh` and `make_smooth_awq_scales_supercloud.sh`. You may need to edit them to set appropriate local model paths.
 
 This will store the corresponding SmoothQuant scales at `$smoothquant_path/act_scales/` (`smoothquant/act_scales` by default), which the rest of the package will rely on.
 
